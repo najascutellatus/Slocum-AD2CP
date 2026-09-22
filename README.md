@@ -18,6 +18,10 @@ This package is built under the assumption that users are processing their AD2CP
 
 Changelog
 ----------------------
+**Unreleased, 2026-09-22**
+
+- Vectorized the per-ping Python loops in `make_dataset.py` (`beam_true_depth`, `calcAHRS`, `beam2enu`, and the `inversion()` G-matrix construction) into NumPy/SciPy array operations, for performance on large deployments. No algorithmic change: verified numerically equivalent to the loop-based version on real RU29 Barbados 2025 data (u/v correlation > 0.9999998, with the residual fully explained by `scipy.sparse.linalg.lsqr`'s iterative floating-point convergence order rather than any change in the computation). The vectorized `beam2enu` implements `honour_pitch_selection` via a per-timestep transform-matrix selection and was checked against the fixed loop-based version below on both real data and synthetic edge cases.
+
 **Unreleased, 2026-09-16**
 
 - Added a `glider.py` module with an interchangeable glider data backend: alongside the existing `get_erddap_dataset` path, `load_glider_dbd`/`load_glider`(`source="dbd"`) reads raw Slocum dbd/ebd files (and their LZ4-compressed dcd/ecd counterparts, needs `dbdreader>=0.6`) directly, useful before a deployment is published to ERDDAP. Both backends return the same segment-table schema.

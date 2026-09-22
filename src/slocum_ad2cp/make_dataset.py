@@ -59,21 +59,45 @@ def check_mean_beam_range_bins(beam,bins):
 
 ##################################################################################################
 
-def beam_true_depth(ds):
+def beam_true_depth(ds, use_loop=False):
+    """
+    Compute the true depth of each beam's measurement cells, adjusting for
+    the glider's pitch and roll.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+    use_loop : bool
+        If True, use the original per-ping Python loop (calling `cell_vert`
+        once per beam per ping) instead of the vectorized broadcast formula.
+        Both paths evaluate the identical trig formula; the loop is kept for
+        cross-checking and is much slower on long deployments.
+    """
     Pitch  = ds['Pitch'].values
     Roll   = ds['Roll'].values
     Vrange = ds.VelocityRange.values
     Depth  = ds['Depth'].values
 
-    # Vectorized: broadcast (n_range, 1) with (1, n_time) -> (n_range, n_time)
-    Vr = Vrange[:, None]
-    P  = Pitch[None, :]
-    R  = Roll[None, :]
+    if use_loop:
+        TrueDepthBeam1 = np.empty((len(Vrange), len(ds.time)))
+        TrueDepthBeam2 = np.empty((len(Vrange), len(ds.time)))
+        TrueDepthBeam3 = np.empty((len(Vrange), len(ds.time)))
+        TrueDepthBeam4 = np.empty((len(Vrange), len(ds.time)))
+        for i in np.arange(0, len(ds.time)):
+            TrueDepthBeam1[:, i] = cell_vert(Pitch[i], Roll[i], Vrange, beam_number=1)
+            TrueDepthBeam2[:, i] = cell_vert(Pitch[i], Roll[i], Vrange, beam_number=2)
+            TrueDepthBeam3[:, i] = cell_vert(Pitch[i], Roll[i], Vrange, beam_number=3)
+            TrueDepthBeam4[:, i] = cell_vert(Pitch[i], Roll[i], Vrange, beam_number=4)
+    else:
+        # Vectorized: broadcast (n_range, 1) with (1, n_time) -> (n_range, n_time)
+        Vr = Vrange[:, None]
+        P  = Pitch[None, :]
+        R  = Roll[None, :]
 
-    TrueDepthBeam1 = Vr * np.sin(np.deg2rad(90 + 47.5 + P)) * np.sin(np.deg2rad(90 - R))
-    TrueDepthBeam2 = Vr * np.sin(np.deg2rad(90 - P)) * np.sin(np.deg2rad(90 + R + 25))
-    TrueDepthBeam3 = Vr * np.sin(np.deg2rad(90 - 47.5 + P)) * np.sin(np.deg2rad(90 - R))
-    TrueDepthBeam4 = Vr * np.sin(np.deg2rad(90 - P)) * np.sin(np.deg2rad(90 - R + 25))
+        TrueDepthBeam1 = Vr * np.sin(np.deg2rad(90 + 47.5 + P)) * np.sin(np.deg2rad(90 - R))
+        TrueDepthBeam2 = Vr * np.sin(np.deg2rad(90 - P)) * np.sin(np.deg2rad(90 + R + 25))
+        TrueDepthBeam3 = Vr * np.sin(np.deg2rad(90 - 47.5 + P)) * np.sin(np.deg2rad(90 - R))
+        TrueDepthBeam4 = Vr * np.sin(np.deg2rad(90 - P)) * np.sin(np.deg2rad(90 - R + 25))
 
     [bdepth, bbins] = np.meshgrid(Depth, Vrange)
     true_depth = bdepth + bbins
@@ -268,7 +292,7 @@ def qaqc_post_coord_transform(ds, high_velocity_threshold, surface_depth_to_filt
 
 ##################################################################################################
 
-def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness):
+def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness, use_loop=False):
     global O_ls, G_ls, bin_new
 
     ## Feb-2021 jgradone@marine.rutgers.edu Initial
@@ -294,6 +318,12 @@ def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness):
     # depth is the depth of the glider measured by the ADCP
     # wDAC is the weight of the DAC constraint (5 per Todd et al. 2017)
     # wSmoothness is the weight of the curvature minimizing contraint (1 per Todd et al. 2017)
+    # use_loop: if True, build the bin counts, G matrix, and per-bin observation
+    #   counts with the original per-ensemble/per-bin Python loops instead of the
+    #   vectorized histogram / COO-matrix / sparse column-sum implementations.
+    #   Both paths produce the identical G matrix (verified bit-for-bit on
+    #   synthetic data); the loop is kept for cross-checking and is much
+    #   slower on long deployments.
 
 
     #########################################################################  
@@ -346,8 +376,17 @@ def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness):
     bin_edges = np.arange(0,math.floor(np.max(bin_depth)),dz).tolist()
 
     # Check that each bin has data in it
-    bin_edges_arr = np.asarray(bin_edges)
-    bin_count = np.histogram(bin_depth.ravel(), bins=bin_edges_arr)[0].astype(float)
+    if use_loop:
+        bin_count = np.empty(len(bin_edges)-1)
+        bin_count[:] = np.nan
+        for k in np.arange(len(bin_edges))[:-1]:
+            # Create index of depth values that fall inside the bin edges
+            ii = np.where((bin_depth > bin_edges[k]) & (bin_depth < bin_edges[k+1]))
+            bin_count[k] = len(bin_depth[ii])
+            ii = []
+    else:
+        bin_edges_arr = np.asarray(bin_edges)
+        bin_count = np.histogram(bin_depth.ravel(), bins=bin_edges_arr)[0].astype(float)
 
     # Create list of bin centers
     bin_new = [x+dz/2 for x in bin_edges[:-1]]
@@ -367,20 +406,45 @@ def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness):
     nz = len(bin_new)  # number of ocean velocities desired in output profile
     nm = nt + nz       # G dimension (2), number of unknowns
 
-    # Vectorized G construction using COO format
-    rows = np.arange(nd)
-    # Uctd columns: each ensemble ii maps to column ii, repeated nbin times
-    col_uctd = np.repeat(np.arange(nt), nbin)
-    # Uocean columns: find closest bin_new for each Z value
-    bin_new_arr = np.asarray(bin_new)
-    Z_flat = Z.ravel(order='F')
-    col_uocean = nt + np.nanargmin(np.abs(Z_flat[:, None] - bin_new_arr[None, :]), axis=1)
+    if use_loop:
+        # Let's build the corresponding coefficient matrix G
+        G = scipy.sparse.lil_matrix((nd, nm), dtype=float)
 
-    G = scipy.sparse.coo_matrix(
-        (np.concatenate([np.full(nd, -1.0), np.full(nd, 1.0)]),
-         (np.concatenate([rows, rows]), np.concatenate([col_uctd, col_uocean]))),
-        shape=(nd, nm)
-    ).tocsr()
+        # Indexing of the G matrix was taken from Todd et al. 2012
+        for ii in np.arange(0,nt):           # Number of ADCP ensembles per segment
+            for jj in np.arange(0,nbin):     # Number of measured bins per ensemble
+
+                # Uctd part of matrix
+                G[(nbin*(ii))+jj,ii] = -1
+                # This will fill in the Uocean part of the matrix. It loops through
+                # all Z members and places them in the proper location in the G matrix
+                # Find the difference between all bin centers and the current Z value
+                dx = abs(bin_new-Z[jj,ii])
+                # Find the minimum of these differences
+                minx = np.nanmin(dx)
+                # Finds bin_new index of the first match of Z and bin_new
+                idx = np.argmin(dx-minx)
+
+                # Uocean part of matrix
+                G[(nbin*(ii))+jj,(nt)+idx] = 1
+
+                del dx, minx, idx
+        G = G.tocsr()
+    else:
+        # Vectorized G construction using COO format
+        rows = np.arange(nd)
+        # Uctd columns: each ensemble ii maps to column ii, repeated nbin times
+        col_uctd = np.repeat(np.arange(nt), nbin)
+        # Uocean columns: find closest bin_new for each Z value
+        bin_new_arr = np.asarray(bin_new)
+        Z_flat = Z.ravel(order='F')
+        col_uocean = nt + np.nanargmin(np.abs(Z_flat[:, None] - bin_new_arr[None, :]), axis=1)
+
+        G = scipy.sparse.coo_matrix(
+            (np.concatenate([np.full(nd, -1.0), np.full(nd, 1.0)]),
+             (np.concatenate([rows, rows]), np.concatenate([col_uctd, col_uocean]))),
+            shape=(nd, nm)
+        ).tocsr()
 
     ##########################################################################        
     # Reshape U and V into the format of the d column vector (order='F')
@@ -436,9 +500,16 @@ def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness):
 
     ##########################################################################        
     ## Calculation the number of observations per bin
-    Gstar_csr = Gstar.tocsr()
-    ocean_block = Gstar_csr[:Z_filt.shape[0], nt:nt+nz]
-    obs_per_bin = np.asarray((ocean_block > 0).sum(axis=0)).ravel().astype(float)
+    if use_loop:
+        obs_per_bin = np.empty(len(bin_new))
+        obs_per_bin[:] = np.nan
+        for x in np.arange(0,nz):
+            rows_where_nt_not_equal_zero = np.where(Gstar.tocsr()[0:Z_filt.shape[0],nt+x].toarray() > 0 )[0]
+            obs_per_bin[x] = len(rows_where_nt_not_equal_zero)
+    else:
+        Gstar_csr = Gstar.tocsr()
+        ocean_block = Gstar_csr[:Z_filt.shape[0], nt:nt+nz]
+        obs_per_bin = np.asarray((ocean_block > 0).sum(axis=0)).ravel().astype(float)
 
     ## If there is no data in the last bin, drop that from the G matrix, bin_new, and obs_per_bin
     if obs_per_bin[-1] == 0:
@@ -593,7 +664,7 @@ def mag_var_correction_ad2cp_ds(ds, heading_var="CorrectedHeading", mag_var_arr=
 
 ##################################################################################################
 
-def calcAHRS(ds, heading_var="CorrectedHeading_MagVar", roll_var="Roll", pitch_var="Pitch"):
+def calcAHRS(ds, heading_var="CorrectedHeading_MagVar", roll_var="Roll", pitch_var="Pitch", use_loop=False):
     """
     Compute AHRS rotation matrix for each time step and attach it to the dataset.
 
@@ -607,6 +678,12 @@ def calcAHRS(ds, heading_var="CorrectedHeading_MagVar", roll_var="Roll", pitch_v
         Name of roll variable in ds.
     pitch_var : str
         Name of pitch variable in ds.
+    use_loop : bool
+        If True, build the rotation matrix with the original per-timestep
+        H @ P matrix-multiply loop instead of the analytically-expanded
+        vectorized formula. Both paths compute the identical matrix; the
+        loop is kept for cross-checking and is much slower on long
+        deployments.
 
     Returns
     -------
@@ -617,22 +694,38 @@ def calcAHRS(ds, heading_var="CorrectedHeading_MagVar", roll_var="Roll", pitch_v
     pp = np.deg2rad(np.asarray(ds[pitch_var]))
     rr = np.deg2rad(np.asarray(ds[roll_var]))
 
-    ch, sh = np.cos(hh), np.sin(hh)
-    cp, sp = np.cos(pp), np.sin(pp)
-    cr, sr = np.cos(rr), np.sin(rr)
+    if use_loop:
+        RotMatrix = np.full((9, len(pp)), np.nan)
+        for k in range(len(pp)):
+            H = np.array([
+                [np.cos(hh[k]), np.sin(hh[k]), 0],
+                [-np.sin(hh[k]), np.cos(hh[k]), 0],
+                [0, 0, 1]
+            ])
+            P = np.array([
+                [np.cos(pp[k]), -np.sin(pp[k])*np.sin(rr[k]), -np.cos(rr[k])*np.sin(pp[k])],
+                [0, np.cos(rr[k]), -np.sin(rr[k])],
+                [np.sin(pp[k]), np.sin(rr[k])*np.cos(pp[k]), np.cos(pp[k])*np.cos(rr[k])]
+            ])
+            R = H @ P
+            RotMatrix[:, k] = R.reshape(-1, order='F')
+    else:
+        ch, sh = np.cos(hh), np.sin(hh)
+        cp, sp = np.cos(pp), np.sin(pp)
+        cr, sr = np.cos(rr), np.sin(rr)
 
-    # Analytical expansion of R = H @ P, stored in Fortran column-major order
-    RotMatrix = np.array([
-        ch * cp,                        # R[0,0]
-        -sh * cp,                       # R[1,0]
-        sp,                             # R[2,0]
-        -ch * sp * sr + sh * cr,        # R[0,1]
-         sh * sp * sr + ch * cr,        # R[1,1]
-        sr * cp,                        # R[2,1]
-        -ch * cr * sp - sh * sr,        # R[0,2]
-         sh * cr * sp - ch * sr,        # R[1,2]
-        cp * cr,                        # R[2,2]
-    ])
+        # Analytical expansion of R = H @ P, stored in Fortran column-major order
+        RotMatrix = np.array([
+            ch * cp,                        # R[0,0]
+            -sh * cp,                       # R[1,0]
+            sp,                             # R[2,0]
+            -ch * sp * sr + sh * cr,        # R[0,1]
+             sh * sp * sr + ch * cr,        # R[1,1]
+            sr * cp,                        # R[2,1]
+            -ch * cr * sp - sh * sr,        # R[0,2]
+             sh * cr * sp - ch * sr,        # R[1,2]
+            cp * cr,                        # R[2,2]
+        ])
 
     ds_out = ds.copy()
     ds_out = ds_out.assign(AHRSRotationMatrix=(("x", "time"), RotMatrix))
@@ -643,7 +736,7 @@ def calcAHRS(ds, heading_var="CorrectedHeading_MagVar", roll_var="Roll", pitch_v
 
 ##################################################################################################
 
-def beam2enu(ds, honour_pitch_selection=True):
+def beam2enu(ds, honour_pitch_selection=True, use_loop=False):
     """
     Transform beam velocities to ENU.
 
@@ -652,7 +745,7 @@ def beam2enu(ds, honour_pitch_selection=True):
     ds : xarray.Dataset
         Must carry InterpVelocityBeam1..4, Pitch and AHRSRotationMatrix.
     honour_pitch_selection : bool
-        Whether to use the pitch-dependent beam triplet the loop below selects.
+        Whether to use the pitch-dependent beam triplet selected below.
         Versions of this package up to 2.0.0 selected that triplet and then
         discarded the choice, always applying the beam 2/3/4 columns. On a
         deployment where that was tested (ru37, Cayman 2026) the discarded
@@ -660,6 +753,12 @@ def beam2enu(ds, honour_pitch_selection=True):
         glider's compass, median absolute deviation 117 degrees against 12
         degrees, and biased the mean vertical velocity to -0.14 m/s against
         0.00 m/s. Pass False to reproduce the old behaviour.
+    use_loop : bool
+        If True, use the original per-ping Python loop instead of the
+        vectorized mask + batched einsum implementation. Both paths select
+        identical beams, transform matrices, and matrix products for every
+        ping; the loop is kept for cross-checking and is much slower on
+        long deployments.
     """
 	## 01/21/2022     jgradone@marine.rutgers.edu     Initial
 
@@ -733,45 +832,75 @@ def beam2enu(ds, honour_pitch_selection=True):
 
     ## If instrument is pointing down, bit 0 in status is equal to 1, rows 2 and 3 must change sign.
     ## Hard coding this because of glider configuration which is pointing down.
-    if honour_pitch_selection:
-        # downcast (pitch<0) uses beams 1,2,4; upcast (pitch>=0) uses beams 2,3,4 -
-        # each with its own transform-matrix columns, per Nortek's beam2xyz layout.
-        mat_down = beam2xyz[0:3, [0, 1, 3]].copy()
-        mat_up = beam2xyz[0:3, 1:4].copy()
+    if use_loop:
+        UVelocity = np.full((n_range, n_time), np.nan)
+        VVelocity = np.full((n_range, n_time), np.nan)
+        WVelocity = np.full((n_range, n_time), np.nan)
+
+        for x in np.arange(0, n_time):
+            if pitch_vals[x] < 0:
+                tot_vel = np.column_stack((InterpVelocityBeam1[:, x], InterpVelocityBeam2[:, x], InterpVelocityBeam4[:, x]))
+                beam2xyz_mat = beam2xyz[0:3, [0, 1, 3]]
+            else:
+                tot_vel = np.column_stack((InterpVelocityBeam2[:, x], InterpVelocityBeam3[:, x], InterpVelocityBeam4[:, x]))
+                beam2xyz_mat = beam2xyz[0:3, 1:4]
+
+            if honour_pitch_selection:
+                beam2xyz_mat = beam2xyz_mat.copy()
+            else:
+                ## Behaviour up to version 2.0.0: the pitch-dependent choice
+                ## above is discarded and the beam 2/3/4 columns are always used.
+                beam2xyz_mat = beam2xyz[0:3, 1:4].copy()
+            beam2xyz_mat[1, :] *= -1
+            beam2xyz_mat[2, :] *= -1
+
+            xyz = np.dot(beam2xyz_mat, tot_vel.T)
+            xyz2enuAHRS = AHRSRotationMatrix[:, x].reshape(3, 3, order='C')
+            enu = np.array(np.dot(xyz2enuAHRS, xyz))
+            UVelocity[:, x] = enu[0, :].ravel()
+            VVelocity[:, x] = enu[1, :].ravel()
+            WVelocity[:, x] = enu[2, :].ravel()
     else:
-        ## Behaviour up to version 2.0.0: the pitch-dependent choice of columns
-        ## above is discarded and the beam 2/3/4 columns are always used.
-        mat_down = beam2xyz[0:3, 1:4].copy()
-        mat_up = beam2xyz[0:3, 1:4].copy()
-    for _m in (mat_down, mat_up):
-        _m[1, :] *= -1
-        _m[2, :] *= -1
+        if honour_pitch_selection:
+            # downcast (pitch<0) uses beams 1,2,4; upcast (pitch>=0) uses beams 2,3,4 -
+            # each with its own transform-matrix columns, per Nortek's beam2xyz layout.
+            mat_down = beam2xyz[0:3, [0, 1, 3]].copy()
+            mat_up = beam2xyz[0:3, 1:4].copy()
+        else:
+            ## Behaviour up to version 2.0.0: the pitch-dependent choice of columns
+            ## above is discarded and the beam 2/3/4 columns are always used.
+            mat_down = beam2xyz[0:3, 1:4].copy()
+            mat_up = beam2xyz[0:3, 1:4].copy()
+        for _m in (mat_down, mat_up):
+            _m[1, :] *= -1
+            _m[2, :] *= -1
 
-    # Select beams based on pitch: downcast (pitch<0) uses 1,2,4; upcast uses 2,3,4
-    down_mask = pitch_vals < 0
-    up_mask = ~down_mask
+        # Select beams based on pitch: downcast (pitch<0) uses 1,2,4; upcast uses 2,3,4
+        down_mask = pitch_vals < 0
+        up_mask = ~down_mask
 
-    tot_vel = np.empty((n_range, 3, n_time))
-    tot_vel[:, 0, down_mask] = InterpVelocityBeam1[:, down_mask]
-    tot_vel[:, 1, down_mask] = InterpVelocityBeam2[:, down_mask]
-    tot_vel[:, 2, down_mask] = InterpVelocityBeam4[:, down_mask]
-    tot_vel[:, 0, up_mask] = InterpVelocityBeam2[:, up_mask]
-    tot_vel[:, 1, up_mask] = InterpVelocityBeam3[:, up_mask]
-    tot_vel[:, 2, up_mask] = InterpVelocityBeam4[:, up_mask]
+        tot_vel = np.empty((n_range, 3, n_time))
+        tot_vel[:, 0, down_mask] = InterpVelocityBeam1[:, down_mask]
+        tot_vel[:, 1, down_mask] = InterpVelocityBeam2[:, down_mask]
+        tot_vel[:, 2, down_mask] = InterpVelocityBeam4[:, down_mask]
+        tot_vel[:, 0, up_mask] = InterpVelocityBeam2[:, up_mask]
+        tot_vel[:, 1, up_mask] = InterpVelocityBeam3[:, up_mask]
+        tot_vel[:, 2, up_mask] = InterpVelocityBeam4[:, up_mask]
 
-    # Beam to XYZ: per-timestep transform matrix (mat_down where pitch<0, else
-    # mat_up), batched over range and time
-    beam2xyz_mat_t = np.where(down_mask[None, None, :], mat_down[:, :, None], mat_up[:, :, None])
-    xyz = np.einsum('ijt,rjt->irt', beam2xyz_mat_t, tot_vel)
+        # Beam to XYZ: per-timestep transform matrix (mat_down where pitch<0, else
+        # mat_up), batched over range and time
+        beam2xyz_mat_t = np.where(down_mask[None, None, :], mat_down[:, :, None], mat_up[:, :, None])
+        xyz = np.einsum('ijt,rjt->irt', beam2xyz_mat_t, tot_vel)
 
-    # XYZ to ENU (per-timestep AHRS rotation)
-    ahrs = AHRSRotationMatrix.reshape(3, 3, n_time)
-    enu = np.einsum('ijt,jrt->irt', ahrs, xyz)
+        # XYZ to ENU (per-timestep AHRS rotation)
+        ahrs = AHRSRotationMatrix.reshape(3, 3, n_time)
+        enu = np.einsum('ijt,jrt->irt', ahrs, xyz)
+        UVelocity, VVelocity, WVelocity = enu[0], enu[1], enu[2]
 
     ds = ds.assign(
-        UVelocity=(("VelocityRange", "time"), enu[0]),
-        VVelocity=(("VelocityRange", "time"), enu[1]),
-        WVelocity=(("VelocityRange", "time"), enu[2]),
+        UVelocity=(("VelocityRange", "time"), UVelocity),
+        VVelocity=(("VelocityRange", "time"), VVelocity),
+        WVelocity=(("VelocityRange", "time"), WVelocity),
     )
     return ds
 

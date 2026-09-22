@@ -21,6 +21,7 @@ Changelog
 **Unreleased, 2026-09-22**
 
 - Vectorized the per-ping Python loops in `make_dataset.py` (`beam_true_depth`, `calcAHRS`, `beam2enu`, and the `inversion()` G-matrix construction) into NumPy/SciPy array operations, for performance on large deployments. No algorithmic change: verified numerically equivalent to the loop-based version on real RU29 Barbados 2025 data (u/v correlation > 0.9999998, with the residual fully explained by `scipy.sparse.linalg.lsqr`'s iterative floating-point convergence order rather than any change in the computation). The vectorized `beam2enu` implements `honour_pitch_selection` via a per-timestep transform-matrix selection and was checked against the fixed loop-based version below on both real data and synthetic edge cases.
+- Added a `use_loop` parameter (default `False`) to `beam_true_depth`, `calcAHRS`, `beam2enu`, and `inversion()`, so the original per-ping Python loop can be selected instead of the vectorized path at call time, for cross-checking. Both paths are verified to agree bit-for-bit on real RU29 Barbados 2025 data.
 
 **Unreleased, 2026-09-16**
 

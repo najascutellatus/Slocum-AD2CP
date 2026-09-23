@@ -91,6 +91,9 @@ for _, seg in segments.iterrows():
     )
     subset = slocum_ad2cp.correct_sound_speed(subset)
     subset = slocum_ad2cp.qaqc_pre_coord_transform(subset, corr_threshold=50, max_amplitude=75)
+    # beam_true_depth/calcAHRS/beam2enu (and inversion, below) all default to
+    # use_loop=False, i.e. the vectorized path — see "Configuration flags"
+    # for the (much slower) loop-based alternative kept for cross-checking.
     subset = slocum_ad2cp.beam_true_depth(subset)
     subset = slocum_ad2cp.binmap_adcp(subset)
     subset = slocum_ad2cp.calcAHRS(subset)

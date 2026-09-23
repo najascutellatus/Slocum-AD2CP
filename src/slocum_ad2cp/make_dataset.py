@@ -11,6 +11,22 @@ import gsw
 ##################################################################################################
 
 def check_max_beam_range(beam,bins):
+    """
+    Furthest bin depth with a non-NaN velocity, for a single ping.
+
+    Parameters
+    ----------
+    beam : array_like
+        1-D velocity profile for one beam, one ping (NaN where no return).
+    bins : array_like
+        Bin depth (or range) for each element of `beam`.
+
+    Returns
+    -------
+    float
+        `bins` value at the deepest non-NaN entry in `beam`, or NaN if the
+        whole ping is NaN.
+    """
     # For a single ping
     ind1 = np.argwhere(np.isnan(beam)==False)
     if len(ind1) == 0:
@@ -23,6 +39,23 @@ def check_max_beam_range(beam,bins):
 ##################################################################################################
 
 def check_max_beam_range_bins(beam,bins):
+    """
+    Same as `check_max_beam_range`, but returns the bin *index* rather than
+    the bin depth/range value.
+
+    Parameters
+    ----------
+    beam : array_like
+        1-D velocity profile for one beam, one ping (NaN where no return).
+    bins : array_like
+        Unused; kept for signature symmetry with `check_max_beam_range`.
+
+    Returns
+    -------
+    float
+        Index of the deepest non-NaN entry in `beam`, or NaN if the whole
+        ping is NaN.
+    """
     # For a single ping
     ind1 = np.argwhere(np.isnan(beam)==False)
     if len(ind1) == 0:
@@ -36,6 +69,24 @@ def check_max_beam_range_bins(beam,bins):
 ##################################################################################################
 
 def check_mean_beam_range(beam,bins):
+    """
+    Bin depth closest to the mean index of non-NaN velocities, for a single
+    ping. A rough single-number summary of how far out a beam is returning
+    usable data.
+
+    Parameters
+    ----------
+    beam : array_like
+        1-D velocity profile for one beam, one ping (NaN where no return).
+    bins : array_like
+        Bin depth (or range) for each element of `beam`.
+
+    Returns
+    -------
+    float
+        `bins` value nearest the mean non-NaN index, or NaN if the whole
+        ping is NaN.
+    """
     # For a single ping
     ind1 = np.argwhere(np.isnan(beam)==False)
     if len(ind1) == 0:
@@ -48,6 +99,23 @@ def check_mean_beam_range(beam,bins):
 ##################################################################################################
 
 def check_mean_beam_range_bins(beam,bins):
+    """
+    Same as `check_mean_beam_range`, but returns the (fractional, unrounded)
+    mean bin *index* rather than the bin depth/range value.
+
+    Parameters
+    ----------
+    beam : array_like
+        1-D velocity profile for one beam, one ping (NaN where no return).
+    bins : array_like
+        Unused; kept for signature symmetry with `check_mean_beam_range`.
+
+    Returns
+    -------
+    float
+        Mean index of the non-NaN entries in `beam`, or NaN if the whole
+        ping is NaN.
+    """
     # For a single ping
     ind1 = np.argwhere(np.isnan(beam)==False)
     if len(ind1) == 0:
@@ -114,6 +182,29 @@ def beam_true_depth(ds, use_loop=False):
 ##################################################################################################
 
 def binmap_adcp(ds):
+    """
+    Interpolate each beam's velocity from its true (tilt-corrected) cell
+    depths onto the instrument's regular, nominal depth grid.
+
+    Each ADCP ping's cells sit at different true depths depending on the
+    glider's pitch/roll at that instant (see `beam_true_depth`), so before
+    beams can be combined ping-by-ping they need to be resampled onto a
+    common depth axis. This does that per-ping, per-beam, via linear
+    interpolation (`np.interp`), extrapolating to NaN beyond the deepest
+    good return.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Must contain `VelocityBeam1..4` and `TrueDepthBeam1..4` (the output
+        of `beam_true_depth`).
+
+    Returns
+    -------
+    xarray.Dataset
+        `ds` with `InterpVelocityBeam1..4` added, each on the
+        `VelocityRange` grid.
+    """
     ## Depth bins to interp onto
     Vrange = np.array(ds.VelocityRange.values)
     
@@ -164,16 +255,53 @@ def binmap_adcp(ds):
 ##################################################################################################
 
 def cell_vert(pitch, roll, velocity_range, beam_number):
+    """
+    Vertical displacement of one beam's measurement cells below the
+    instrument, given the glider's pitch and roll.
+
+    A 4-beam Janus ADCP measures along beams angled off the instrument's
+    vertical axis, so a cell nominally `velocity_range` meters along the
+    beam is not `velocity_range` meters straight down once the instrument
+    tilts. This resolves that geometry to a true vertical offset (see also
+    `beam_true_depth`, which calls this once per beam per ping in its
+    `use_loop=True` path; the vectorized default path inlines the same
+    formula).
+
+    Beam layout (fixed for this instrument):
+        Beam 1: Forward   (47.5 degrees off horizontal)
+        Beam 2: Port      (25 degrees off horizontal)
+        Beam 3: Aft       (47.5 degrees off horizontal)
+        Beam 4: Starboard (25 degrees off horizontal)
+    The beam angle is folded into pitch for beams 1 & 3, and into roll for
+    beams 2 & 4.
+
+    Parameters
+    ----------
+    pitch : float
+        Pitch in degrees. Positive = pitch up.
+    roll : float
+        Roll in degrees. Positive = port wing up.
+    velocity_range : array_like
+        Along-beam distance to each cell, in meters.
+    beam_number : int
+        Which beam (1-4) `velocity_range` belongs to.
+
+    Returns
+    -------
+    numpy.ndarray
+        Vertical displacement below the instrument for each cell in
+        `velocity_range`, in meters.
+    """
     ## Calculate a vertical displacement below instrument for
     ## each adcp bin adjusting for pitch and roll (in degrees)
     ## Positive roll: Port wing up
-    ## Positive pitch: Pitch up  
-    
+    ## Positive pitch: Pitch up
+
     ## Beam 1: Forward   (47.5 degrees off horizontal)
     ## Beam 2: Port      (25 degrees off horizontal)
     ## Beam 3: Aft       (47.5 degrees off horizontal)
     ## Beam 4: Starboard (25 degrees off horizontal)
-    
+
     ## Beam angle is only incorporated in pitch for Beams 1 & 3 and
     ## in roll for Beams 2 & 4
 
@@ -207,6 +335,21 @@ def cell_vert(pitch, roll, velocity_range, beam_number):
 ##################################################################################################
 
 def correct_sound_speed(ds):
+    """
+    Rescale each beam's velocity by the ratio of the instrument's measured
+    speed of sound to the fixed 1500 m/s the AD2CP assumes internally when
+    converting Doppler shift to velocity.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Must contain `VelocityBeam1..4` and `SpeedOfSound`.
+
+    Returns
+    -------
+    xarray.Dataset
+        `ds` with `VelocityBeam1..4` corrected in place.
+    """
     default_speedofsound = 1500
     ds["VelocityBeam1"] = ds.VelocityBeam1*(ds.SpeedOfSound/default_speedofsound)
     ds["VelocityBeam2"] = ds.VelocityBeam2*(ds.SpeedOfSound/default_speedofsound)
@@ -218,6 +361,32 @@ def correct_sound_speed(ds):
 ##################################################################################################
 
 def qaqc_pre_coord_transform(ds, corr_threshold, max_amplitude):
+    """
+    Discard beam velocities with weak or saturated acoustic returns, before
+    the beam-to-ENU coordinate transform.
+
+    Nortek's correlation and amplitude fields are the standard proxies for a
+    ping's reliability: low correlation means the two pulses used to derive
+    the Doppler shift don't match well (noisy velocity), and unusually high
+    amplitude typically indicates the beam has hit the surface, bottom, or
+    the glider's own hull rather than open water.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Must contain `VelocityBeam1..4`, `CorrelationBeam1..4`, and
+        `AmplitudeBeam1..4`.
+    corr_threshold : float
+        Beam correlation (percent) below which a cell is set to NaN.
+    max_amplitude : float
+        Beam amplitude above which a cell is set to NaN.
+
+    Returns
+    -------
+    xarray.Dataset
+        `ds` with `VelocityBeam1..4` NaN'd out at low-correlation or
+        high-amplitude cells.
+    """
     ## This sucks but much faster than working through xarray
     VelocityBeam1    = ds.VelocityBeam1.values
     VelocityBeam2    = ds.VelocityBeam2.values
@@ -255,11 +424,37 @@ def qaqc_pre_coord_transform(ds, corr_threshold, max_amplitude):
 ##################################################################################################
 
 def qaqc_post_coord_transform(ds, high_velocity_threshold, surface_depth_to_filter):
-    ## This does three thingss:
-    ## 1) Filters out high velocities relative to glider
-    ## 2) Filters out the first bin below the glider (contaminated for vehicle motion)
-    ## 3) Filters out velocity data if the GLIDER'S depth is x meters or shallower
-    
+    """
+    Final velocity QC, applied after the beam-to-ENU coordinate transform.
+
+    Does three things:
+      1. Discards U/V/W velocities whose magnitude exceeds
+         `high_velocity_threshold` (physically implausible relative to the
+         glider's own speed through water, usually a sign of a bad
+         transform for that ping).
+      2. Discards the first (shallowest) bin below the glider, which sits in
+         the wake of the vehicle and is contaminated by its own motion.
+      3. Discards all velocities for any ping where the *glider's* depth
+         (not the cell depth) is shallower than `surface_depth_to_filter`,
+         since near-surface pings are noisy (wave action, bubbles).
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Must contain `UVelocity`, `VVelocity`, `WVelocity`, and `Depth`
+        (the glider's depth, one value per ping).
+    high_velocity_threshold : float
+        Maximum plausible |velocity| in m/s.
+    surface_depth_to_filter : float
+        Glider depth in meters at or shallower than which a ping's
+        velocities are discarded entirely.
+
+    Returns
+    -------
+    xarray.Dataset
+        `ds` with `UVelocity`, `VVelocity`, `WVelocity` NaN'd out per the
+        rules above.
+    """
     ## This sucks but much faster than working through xarray
     UVelocity    =  ds.UVelocity.values
     VVelocity    =  ds.VVelocity.values
@@ -293,40 +488,73 @@ def qaqc_post_coord_transform(ds, high_velocity_threshold, surface_depth_to_filt
 ##################################################################################################
 
 def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness, use_loop=False):
-    global O_ls, G_ls, bin_new
+    """
+    Per-segment least-squares shear inversion (Todd et al. 2017 /
+    Visbeck 2002 style): combine per-ping, per-bin ADCP velocity
+    measurements with a depth-averaged-current constraint into a single
+    ocean velocity profile.
+
+    An ADCP mounted on a glider measures velocity *relative to the glider*,
+    ping by ping, at fixed ranges from the instrument. As the glider dives
+    or climbs, the same patch of ocean gets sampled from many different
+    glider positions (and thus is redundantly over-determined), while the
+    glider's own unknown through-water velocity contaminates every single
+    ping. This sets up and solves the sparse linear system that separates
+    the two: one unknown glider velocity per ping (`Uctd`) and one unknown
+    ocean velocity per depth bin (`Uocean`), constrained so that the
+    depth-averaged ocean velocity matches the glider's independently-known
+    dive-averaged current (from GPS fixes at the surface).
+
+    Parameters
+    ----------
+    U, V : numpy.ndarray, shape (n_bin, n_ping)
+        Measured east-west (U) and north-south (V) velocities from the
+        ADCP, relative to the glider, for one dive/climb segment.
+    dz : float
+        Desired vertical resolution of the output profile, in meters.
+        Should not be smaller than the ADCP's own bin length.
+    u_daverage, v_daverage : float
+        Depth-averaged (dive-averaged) current for this segment, from GPS
+        surfacing fixes. Set to 0 for real-time processing without DAC.
+    bins : numpy.ndarray
+        Bin depths (ranges) corresponding to the rows of `U`/`V`.
+    depth : numpy.ndarray
+        Glider depth for each ping (column of `U`/`V`), as measured by the
+        ADCP's own pressure sensor.
+    wDAC : float
+        Weight of the depth-averaged-current constraint (5, per Todd et al.
+        2017).
+    wSmoothness : float
+        Weight of the curvature-minimizing (smoothness) constraint (1, per
+        Todd et al. 2017). Set to 0 to disable.
+    use_loop : bool
+        If True, build the bin counts, G matrix, and per-bin observation
+        counts with the original per-ensemble/per-bin Python loops instead
+        of the vectorized histogram / COO-matrix / sparse column-sum
+        implementations. Both paths produce the identical G matrix
+        (verified bit-for-bit on synthetic data); the loop is kept for
+        cross-checking and is much slower on long deployments.
+
+    Returns
+    -------
+    O_ls : numpy.ndarray
+        Ocean velocity profile, one complex value per depth bin (real part
+        = east-west, imaginary part = north-south).
+    G_ls : numpy.ndarray
+        Glider (through-water) velocity, one complex value per ping.
+    bin_new : list of float
+        Depth bin centers corresponding to `O_ls`.
+    obs_per_bin : numpy.ndarray
+        Number of good velocity observations backing each bin of `O_ls`.
 
     ## Feb-2021 jgradone@marine.rutgers.edu Initial
     ## Jul-2021 jgradone@marine.rutgers.edu Updates for constraints
     ## Jun-2022 jgradone@marine.rutgers.edu Corrected dimensions and indexing of G matrix
     ## Jun-2022 jgradone@marine.rutgers.edu Added curvature minimizing constraint and constraint weights
+    """
+    global O_ls, G_ls, bin_new
 
-    ## Purpose: Take velocity measurements from glider mounted ADCP and compute
-    # shear profiles
-
-    ## Outputs:
-    # O_ls is the ocean velocity profile
-    # G_ls is the glider velocity profile
-    # bin_new are the bin centers for the point in the profiles
-    # obs_per_bin is the number of good velocity observations per final profile bin
-
-    ## Inputs:
-    # dz is desired vertical resolution, should not be smaller than bin length 
-    # U is measured east-west velocities from ADCP
-    # V is measured north-south velocities from ADCP
-    # bins is the bin depths for the U and V measurements
-    # uv_daverage is depth averaged velocity (Set to 0 for real-time)
-    # depth is the depth of the glider measured by the ADCP
-    # wDAC is the weight of the DAC constraint (5 per Todd et al. 2017)
-    # wSmoothness is the weight of the curvature minimizing contraint (1 per Todd et al. 2017)
-    # use_loop: if True, build the bin counts, G matrix, and per-bin observation
-    #   counts with the original per-ensemble/per-bin Python loops instead of the
-    #   vectorized histogram / COO-matrix / sparse column-sum implementations.
-    #   Both paths produce the identical G matrix (verified bit-for-bit on
-    #   synthetic data); the loop is kept for cross-checking and is much
-    #   slower on long deployments.
-
-
-    #########################################################################  
+    #########################################################################
     ## These steps filter for NAN rows and columns so they are technically QAQC
     ## but I think the best place to put them is inthe inversion function because
     ## if there are nans still present in the data here, it will throw everything off
@@ -549,7 +777,46 @@ def inversion(U,V,dz,u_daverage,v_daverage,bins,depth, wDAC, wSmoothness, use_lo
 ##################################################################################################
 
 def shear_method(U,V,W,vx,vy,bins,depth,dz):
-    ########################################################################  
+    """
+    Alternative to `inversion()`: reference shear (velocity differences
+    between adjacent depth bins) to an absolute profile using the segment's
+    dive-averaged current, in the style of the shear-integration methods
+    used by `gliderad2cp` (Frajka-Williams et al. / Todd et al. shear
+    approach), rather than `inversion()`'s simultaneous least-squares
+    solve.
+
+    **Currently broken / not usable.** This function calls
+    `calc_ensemble_shear`, `bin_attr`, and `shear_to_vel`, none of which are
+    defined anywhere in this package (or imported from elsewhere) - calling
+    it raises `NameError`. It is still exported in `__all__`. Use
+    `inversion()` instead until this is fixed or these helpers are added.
+
+    Parameters
+    ----------
+    U, V, W : numpy.ndarray, shape (n_bin, n_ping)
+        Measured east-west, north-south, and vertical velocities from the
+        ADCP, relative to the glider, for one dive/climb segment.
+    vx, vy : float
+        Reference (e.g. dive-averaged) east-west/north-south velocity to
+        anchor the integrated shear profile to.
+    bins : numpy.ndarray
+        Bin depths (ranges) corresponding to the rows of `U`/`V`/`W`.
+    depth : numpy.ndarray
+        Glider depth for each ping (column of `U`/`V`/`W`).
+    dz : float
+        Desired vertical resolution of the output profile, in meters.
+
+    Returns
+    -------
+    vel_referenced : numpy.ndarray
+        Absolute velocity profile referenced to `vx`/`vy`.
+    bin_centers : numpy.ndarray
+        Depth bin centers corresponding to `vel_referenced`.
+    vel_referenced_std : numpy.ndarray
+        Estimated uncertainty per bin (combining per-ping instrument noise
+        and shear-binning spread).
+    """
+    ########################################################################
     # These steps filter for NAN rows and columns so they are technically QAQC
     # but I think the best place to put them is inthe inversion function because
     # if there are nans still present in the data here, it will throw everything off
@@ -618,6 +885,27 @@ def shear_method(U,V,W,vx,vy,bins,depth,dz):
 ##################################################################################################
 
 def mag_var_correction(heading,u_dac,v_dac,mag_var):
+    """
+    Rotate a heading and a depth-averaged-current vector from magnetic to
+    true north.
+
+    Parameters
+    ----------
+    heading : array_like
+        Heading in degrees, magnetic.
+    u_dac, v_dac : float or array_like
+        East-west / north-south depth-averaged current, magnetic frame.
+    mag_var : float or array_like
+        Magnetic variation (declination) in degrees at the glider's
+        location, matching the sign convention of `heading`.
+
+    Returns
+    -------
+    heading_corrected : array_like
+        `heading` rotated onto true north, in degrees.
+    u_dac_corrected, v_dac_corrected : float or array_like
+        `u_dac`/`v_dac` rotated onto true north.
+    """
     heading_corrected = heading - mag_var ## Corrected heading in degrees
     mag_var_rad = np.deg2rad(mag_var)
     heading_rad = np.deg2rad(heading)
@@ -925,9 +1213,8 @@ def load_ad2cp(ncfile, mean_lat=45):
     Returns
     -------
     ds : xarray.Dataset
-        Combined dataset with Depth variable.
-    group : str
-        Group that was loaded ('Average' or 'Burst').
+        Combined dataset with Depth variable. Which group ('Average' or
+        'Burst') was loaded is not currently exposed to the caller.
     """
     # Normalize input into list
     if isinstance(ncfile, str):
@@ -1010,6 +1297,42 @@ def load_ad2cp(ncfile, mean_lat=45):
 ##################################################################################################
 
 def ellipsoid_fit(X, flag=0, equals='xy'):
+	"""
+	Fit an ellipsoid (or constrained special cases of one) to a 3-D point
+	cloud by least squares. Used internally by `correct_ad2cp_heading` for
+	soft-iron magnetometer calibration: raw magnetometer readings over a
+	full rotation should trace a sphere centered on the origin, but nearby
+	ferrous material distorts that into an off-center ellipsoid, so fitting
+	one and recentering removes the distortion.
+
+	Not part of the public API (not in `__all__`); use
+	`correct_ad2cp_heading` instead unless you need this directly.
+
+	Parameters
+	----------
+	X : numpy.ndarray, shape (n_points, 3)
+		Point cloud to fit, e.g. raw (Mx, My, Mz) magnetometer samples.
+	flag : int
+		Constraint on the fit: 0 = general ellipsoid (needs >= 9 points),
+		1 = axis-aligned ellipsoid (>= 6 points), 2 = axis-aligned with two
+		radii equal per `equals` (>= 5 points), 3 = sphere (>= 4 points).
+	equals : {'xy', 'xz', 'zx', 'yz', 'zy'}
+		Which pair of axes share a radius when `flag == 2`.
+
+	Returns
+	-------
+	center : numpy.ndarray, shape (3,)
+		Fitted ellipsoid center.
+	radii : numpy.ndarray, shape (3,)
+		Fitted ellipsoid radii along its principal axes.
+	evecs : numpy.ndarray, shape (3, 3)
+		Principal axes (eigenvectors); identity for `flag != 0`, since
+		those constrained fits assume axis alignment.
+	evals : numpy.ndarray or None
+		Eigenvalues backing `radii` when `flag == 0`; None otherwise.
+	v : numpy.ndarray
+		Raw coefficient vector of the fitted quadric surface.
+	"""
 	if X.shape[1] != 3:
 		raise ValueError('Input data must have three columns!')
 	

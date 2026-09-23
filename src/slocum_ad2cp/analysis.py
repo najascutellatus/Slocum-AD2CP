@@ -5,9 +5,23 @@ from math import sin, cos, sqrt, atan2, radians
 
 
 
-## Calculate distance in meters from 2 lat and lon points
 def dist_from_lat_lon(lat1,lon1,lat2,lon2):
+    """
+    Great-circle distance between two lat/lon points, via the haversine
+    formula.
 
+    Parameters
+    ----------
+    lat1, lon1 : float
+        First point, in degrees.
+    lat2, lon2 : float
+        Second point, in degrees.
+
+    Returns
+    -------
+    float
+        Distance in meters.
+    """
     # approximate radius of earth in km
     R = 6373.0
 
@@ -29,8 +43,28 @@ def dist_from_lat_lon(lat1,lon1,lat2,lon2):
 
 
 
-# Calculate rho from salinity, temperature, pressure, lon, lat
 def gsw_rho(SP, T, P, lon, lat):
+        """
+        In-situ seawater density from practical salinity, temperature, and
+        pressure, via the TEOS-10 (GSW) equation of state.
+
+        Parameters
+        ----------
+        SP : array_like
+            Practical salinity (PSU).
+        T : array_like
+            In-situ temperature (degrees C).
+        P : array_like
+            Sea pressure (dbar).
+        lon, lat : array_like
+            Longitude / latitude, needed to convert practical to absolute
+            salinity.
+
+        Returns
+        -------
+        array_like
+            In-situ density (kg/m^3).
+        """
         # Calculates absolute salinity (g/kg) from PSU
         SA = gsw.SA_from_SP(SP, P, lon, lat)
         # in-situ density
